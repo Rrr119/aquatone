@@ -2,6 +2,9 @@ package core
 
 import (
 	"fmt"
+	"net"
+	"net/url"
+	"strings"
 )
 
 var (
@@ -40,4 +43,61 @@ func isStandardPort(port int) bool {
 		return true
 	}
 	return false
+}
+
+// TargetKey returns a stable key used to deduplicate reconnaissance targets.
+// The key deliberately does not replace the original target: reports should
+// continue to show the URL as it was supplied by the user.
+func TargetKey(target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return ""
+	}
+
+	u, err := url.Parse(target)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return strings.ToLower(strings.TrimSuffix(target, "."))
+	}
+
+	u.Scheme = strings.ToLower(u.Scheme)
+	hostname := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	port := u.Port()
+	if (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+		port = ""
+	}
+
+	host := hostname
+	if ip := net.ParseIP(hostname); ip != nil && strings.Contains(hostname, ":") {
+		host = "[" + hostname + "]"
+	}
+	if port != "" {
+		host += ":" + port
+	}
+	u.Host = host
+	u.Fragment = ""
+	if u.Path == "" {
+		u.Path = "/"
+	}
+
+	return u.String()
+}
+
+// DeduplicateTargets removes duplicate targets while preserving input order.
+func DeduplicateTargets(targets []string) []string {
+	seen := make(map[string]struct{}, len(targets))
+	unique := make([]string, 0, len(targets))
+
+	for _, target := range targets {
+		key := TargetKey(target)
+		if key == "" {
+			continue
+		}
+		if _, found := seen[key]; found {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, target)
+	}
+
+	return unique
 }

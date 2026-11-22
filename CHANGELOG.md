@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Dedicated screenshot concurrency limiting with the `-screenshot-threads` flag
+- Optional screenshots-per-second throttling with the `-screenshot-rate` flag
+- Target and screenshot deduplication for large batch runs
+- Regression coverage for 500 screenshot targets and existing report/session formats
+
 ## [1.7.0]
 
 ### Added

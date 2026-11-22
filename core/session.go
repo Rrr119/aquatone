@@ -34,6 +34,7 @@ type Stats struct {
 	ResponseCode5xx      uint32    `json:"responseCode5xx"`
 	ScreenshotSuccessful uint32    `json:"screenshotSuccessful"`
 	ScreenshotFailed     uint32    `json:"screenshotFailed"`
+	ScreenshotDeduped    uint32    `json:"screenshotDeduped"`
 }
 
 func (s *Stats) Duration() time.Duration {
@@ -78,6 +79,10 @@ func (s *Stats) IncrementScreenshotSuccessful() {
 
 func (s *Stats) IncrementScreenshotFailed() {
 	atomic.AddUint32(&s.ScreenshotFailed, 1)
+}
+
+func (s *Stats) IncrementScreenshotDeduped() {
+	atomic.AddUint32(&s.ScreenshotDeduped, 1)
 }
 
 type Session struct {
@@ -126,6 +131,8 @@ func (s *Session) AddPage(url string) (*Page, error) {
 }
 
 func (s *Session) GetPage(url string) *Page {
+	s.Lock()
+	defer s.Unlock()
 	if page, ok := s.Pages[url]; ok {
 		return page
 	}
@@ -133,6 +140,8 @@ func (s *Session) GetPage(url string) *Page {
 }
 
 func (s *Session) GetPageByUUID(id string) *Page {
+	s.Lock()
+	defer s.Unlock()
 	for _, page := range s.Pages {
 		if page.UUID == id {
 			return page
@@ -267,6 +276,14 @@ func NewSession() (*Session, error) {
 
 	if session.Options, err = ParseOptions(); err != nil {
 		return nil, err
+	}
+
+	if *session.Options.ScreenshotThreads < 0 {
+		return nil, fmt.Errorf("Screenshot threads must be zero or greater")
+	}
+
+	if *session.Options.ScreenshotRate < 0 {
+		return nil, fmt.Errorf("Screenshot rate must be zero or greater")
 	}
 
 	if *session.Options.ChromePath != "" {

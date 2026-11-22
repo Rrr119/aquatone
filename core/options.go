@@ -18,6 +18,8 @@ type Options struct {
 	ScanTimeout       *int
 	HTTPTimeout       *int
 	ScreenshotTimeout *int
+	ScreenshotThreads *int
+	ScreenshotRate    *int
 	Nmap              *bool
 	SaveBody          *bool
 	Silent            *bool
@@ -38,6 +40,8 @@ func ParseOptions() (Options, error) {
 		ScanTimeout:       flag.Int("scan-timeout", 100, "Timeout in miliseconds for port scans"),
 		HTTPTimeout:       flag.Int("http-timeout", 3*1000, "Timeout in miliseconds for HTTP requests"),
 		ScreenshotTimeout: flag.Int("screenshot-timeout", 30*1000, "Timeout in miliseconds for screenshots"),
+		ScreenshotThreads: flag.Int("screenshot-threads", 4, "Number of concurrent browser instances used for screenshots (0 uses -threads)"),
+		ScreenshotRate:    flag.Int("screenshot-rate", 0, "Maximum number of screenshots per second (0 for unlimited)"),
 		Nmap:              flag.Bool("nmap", false, "Parse input as Nmap/Masscan XML"),
 		SaveBody:          flag.Bool("save-body", true, "Save response bodies to files"),
 		Silent:            flag.Bool("silent", false, "Suppress all output except for errors"),

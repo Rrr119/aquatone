@@ -1,0 +1,17 @@
+{
+  "root": "/home/dev/feedback/uid34486",
+  "B": "/home/dev/feedback/uid34486",
+  "sha": "c5ba53d90fca1368077449c391f6c12c24065f59",
+  "wslDistro": "Ubuntu-26.04",
+  "source": {
+    "owner": "michenriksen",
+    "repo": "aquatone",
+    "sha": "c5ba53d90fca1368077449c391f6c12c24065f59"
+  },
+  "fork": {
+    "owner": "Rrr119",
+    "repo": "aquatone",
+    "cloneUrl": "https://github.com/Rrr119/aquatone.git"
+  },
+  "at": "2026-11-22T16:37:19.332Z"
+}

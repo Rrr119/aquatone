@@ -9,15 +9,22 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/michenriksen/aquatone/core"
 )
 
 type URLScreenshotter struct {
-	session         *core.Session
-	chromePath      string
-	tempUserDirPath string
+	session            *core.Session
+	chromePath         string
+	tempUserDirPath    string
+	screenshotSlots    chan struct{}
+	runScreenshot      func(context.Context, *core.Page, string) (bool, error)
+	dedupMutex         sync.Mutex
+	dedupedScreenshots map[string]struct{}
+	rateMutex          sync.Mutex
+	nextScreenshotAt   time.Time
 }
 
 func NewURLScreenshotter() *URLScreenshotter {
@@ -34,6 +41,7 @@ func (a *URLScreenshotter) Register(s *core.Session) error {
 	a.session = s
 	a.createTempUserDir()
 	a.locateChrome()
+	a.initializeScheduler()
 
 	return nil
 }
@@ -45,6 +53,24 @@ func (a *URLScreenshotter) OnURLResponsive(url string) {
 		a.session.Out.Error("Unable to find page for URL: %s\n", url)
 		return
 	}
+
+	filename := page.BaseFilename()
+	if filename == "" {
+		filename = url
+	}
+
+	a.dedupMutex.Lock()
+	if a.dedupedScreenshots == nil {
+		a.dedupedScreenshots = make(map[string]struct{})
+	}
+	if _, found := a.dedupedScreenshots[filename]; found {
+		a.dedupMutex.Unlock()
+		a.session.Stats.IncrementScreenshotDeduped()
+		a.session.Out.Debug("[%s] Skipping duplicate screenshot for %s\n", a.ID(), url)
+		return
+	}
+	a.dedupedScreenshots[filename] = struct{}{}
+	a.dedupMutex.Unlock()
 
 	a.session.WaitGroup.Add()
 	go func(page *core.Page) {
@@ -67,6 +93,22 @@ func (a *URLScreenshotter) createTempUserDir() {
 	}
 	a.session.Out.Debug("[%s] Created temporary user directory at: %s\n", a.ID(), dir)
 	a.tempUserDirPath = dir
+}
+
+func (a *URLScreenshotter) initializeScheduler() {
+	a.dedupedScreenshots = make(map[string]struct{})
+	a.screenshotSlots = make(chan struct{}, a.screenshotConcurrency())
+	a.runScreenshot = a.runChromeScreenshot
+}
+
+func (a *URLScreenshotter) screenshotConcurrency() int {
+	if a.session.Options.ScreenshotThreads != nil && *a.session.Options.ScreenshotThreads > 0 {
+		return *a.session.Options.ScreenshotThreads
+	}
+	if a.session.Options.Threads != nil && *a.session.Options.Threads > 0 {
+		return *a.session.Options.Threads
+	}
+	return 1
 }
 
 func (a *URLScreenshotter) locateChrome() {
@@ -125,14 +167,55 @@ func (a *URLScreenshotter) locateChrome() {
 
 func (a *URLScreenshotter) screenshotPage(page *core.Page) {
 	filePath := fmt.Sprintf("screenshots/%s.png", page.BaseFilename())
+
+	a.waitForRateLimit()
+	if a.screenshotSlots != nil {
+		a.screenshotSlots <- struct{}{}
+		defer func() { <-a.screenshotSlots }()
+	}
+
+	runScreenshot := a.runScreenshot
+	if runScreenshot == nil {
+		runScreenshot = a.runChromeScreenshot
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*a.session.Options.ScreenshotTimeout)*time.Millisecond)
+	defer cancel()
+
+	timedOut, err := runScreenshot(ctx, page, a.session.GetFilePath(filePath))
+	if err != nil {
+		a.session.Stats.IncrementScreenshotFailed()
+		a.session.Out.Debug("[%s] Error: %v\n", a.ID(), err)
+		if timedOut {
+			a.session.Out.Error("%s: screenshot timed out\n", page.URL)
+			return
+		}
+
+		a.session.Out.Error("%s: screenshot failed: %s\n", page.URL, err)
+		return
+	}
+
+	a.session.Stats.IncrementScreenshotSuccessful()
+	a.session.Out.Info("%s: %s\n", page.URL, Green("screenshot successful"))
+	page.ScreenshotPath = filePath
+	page.HasScreenshot = true
+}
+
+func (a *URLScreenshotter) runChromeScreenshot(ctx context.Context, page *core.Page, screenshotPath string) (bool, error) {
+	userDataDir, err := ioutil.TempDir(a.tempUserDirPath, "profile-")
+	if err != nil {
+		return false, err
+	}
+	defer os.RemoveAll(userDataDir)
+
 	var chromeArguments = []string{
 		"--headless", "--disable-gpu", "--hide-scrollbars", "--mute-audio", "--disable-notifications",
 		"--no-first-run", "--disable-crash-reporter", "--ignore-certificate-errors", "--incognito",
 		"--disable-infobars", "--disable-sync", "--no-default-browser-check",
-		"--user-data-dir=" + a.tempUserDirPath,
+		"--user-data-dir=" + userDataDir,
 		"--user-agent=" + RandomUserAgent(),
 		"--window-size=" + *a.session.Options.Resolution,
-		"--screenshot=" + a.session.GetFilePath(filePath),
+		"--screenshot=" + screenshotPath,
 	}
 
 	if os.Geteuid() == 0 {
@@ -145,37 +228,52 @@ func (a *URLScreenshotter) screenshotPage(page *core.Page) {
 
 	chromeArguments = append(chromeArguments, page.URL)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*a.session.Options.ScreenshotTimeout)*time.Millisecond)
-	defer cancel()
-
 	cmd := exec.CommandContext(ctx, a.chromePath, chromeArguments...)
 	if err := cmd.Start(); err != nil {
-		a.session.Out.Debug("[%s] Error: %v\n", a.ID(), err)
-		a.session.Stats.IncrementScreenshotFailed()
-		a.session.Out.Error("%s: screenshot failed: %s\n", page.URL, err)
 		a.killChromeProcessIfRunning(cmd)
-		return
+		return false, err
 	}
 
 	if err := cmd.Wait(); err != nil {
-		a.session.Stats.IncrementScreenshotFailed()
-		a.session.Out.Debug("[%s] Error: %v\n", a.ID(), err)
 		if ctx.Err() == context.DeadlineExceeded {
-			a.session.Out.Error("%s: screenshot timed out\n", page.URL)
 			a.killChromeProcessIfRunning(cmd)
-			return
+			return true, err
 		}
 
-		a.session.Out.Error("%s: screenshot failed: %s\n", page.URL, err)
 		a.killChromeProcessIfRunning(cmd)
+		return false, err
+	}
+
+	a.killChromeProcessIfRunning(cmd)
+	return false, nil
+}
+
+func (a *URLScreenshotter) waitForRateLimit() {
+	if a.session.Options.ScreenshotRate == nil || *a.session.Options.ScreenshotRate == 0 {
 		return
 	}
 
-	a.session.Stats.IncrementScreenshotSuccessful()
-	a.session.Out.Info("%s: %s\n", page.URL, Green("screenshot successful"))
-	page.ScreenshotPath = filePath
-	page.HasScreenshot = true
-	a.killChromeProcessIfRunning(cmd)
+	if delay := a.reserveRateSlot(time.Now()); delay > 0 {
+		time.Sleep(delay)
+	}
+}
+
+func (a *URLScreenshotter) reserveRateSlot(now time.Time) time.Duration {
+	if a.session.Options.ScreenshotRate == nil || *a.session.Options.ScreenshotRate <= 0 {
+		return 0
+	}
+
+	interval := time.Second / time.Duration(*a.session.Options.ScreenshotRate)
+	a.rateMutex.Lock()
+	defer a.rateMutex.Unlock()
+
+	if a.nextScreenshotAt.IsZero() || !a.nextScreenshotAt.After(now) {
+		a.nextScreenshotAt = now
+	}
+
+	delay := a.nextScreenshotAt.Sub(now)
+	a.nextScreenshotAt = a.nextScreenshotAt.Add(interval)
+	return delay
 }
 
 func (a *URLScreenshotter) killChromeProcessIfRunning(cmd *exec.Cmd) {

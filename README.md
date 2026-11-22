@@ -37,6 +37,10 @@ If you for some reason don't trust the pre-compiled binaries, you can also compi
     	Save response bodies to files (default true)
   -scan-timeout int
     	Timeout in miliseconds for port scans (default 100)
+  -screenshot-rate int
+    Maximum number of screenshots per second (0 for unlimited)
+  -screenshot-threads int
+    Number of concurrent browser instances used for screenshots (default 4; 0 uses -threads)
   -screenshot-timeout int
     	Timeout in miliseconds for screenshots (default 30000)
   -session string
@@ -83,6 +87,23 @@ If you don't want Aquatone to create files in the current working directory, you
 It is also possible to set a permanent default output destination by defining an environment variable:
 
     export AQUATONE_OUT_PATH="~/aquatone"
+
+
+### Screenshot concurrency and deduplication
+
+Screenshots have their own concurrency limit so a large target list cannot start
+an unbounded number of browser processes. The optional `-screenshot-rate` flag
+adds a per-second cap on top of the concurrency limit:
+
+    $ cat hosts.txt | aquatone -screenshot-threads 8 -screenshot-rate 5
+
+Targets are deduplicated before scanning. URLs that differ only by hostname
+case, a default port, a trailing root slash, or a fragment are treated as the
+same target. Screenshot jobs are also deduplicated by output file name, so
+repeated responsive events cannot overwrite or race with an existing capture.
+The first supplied URL is kept in the report and the existing
+`aquatone_report.html` and `aquatone_session.json` continue to load and render
+without changes.
 
 
 ### Specifying ports to scan

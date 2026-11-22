@@ -140,13 +140,20 @@ func main() {
 		}
 	}
 
+	targets = core.DeduplicateTargets(targets)
 	if len(targets) == 0 {
 		sess.Out.Fatal("No targets found in input.\n")
 		os.Exit(1)
 	}
 
+	screenshotThreads := *sess.Options.ScreenshotThreads
+	if screenshotThreads == 0 {
+		screenshotThreads = *sess.Options.Threads
+	}
+
 	sess.Out.Important("Targets    : %d\n", len(targets))
 	sess.Out.Important("Threads    : %d\n", *sess.Options.Threads)
+	sess.Out.Important("Screenshots: %d concurrent, %s\n", screenshotThreads, screenshotRateDescription(*sess.Options.ScreenshotRate))
 	sess.Out.Important("Ports      : %s\n", strings.Trim(strings.Replace(fmt.Sprint(sess.Ports), " ", ", ", -1), "[]"))
 	sess.Out.Important("Output dir : %s\n\n", *sess.Options.OutDir)
 
@@ -262,8 +269,16 @@ func main() {
 	sess.Out.Info(" - 5xx : %v\n\n", sess.Stats.ResponseCode5xx)
 
 	sess.Out.Important("Screenshots:\n")
-	sess.Out.Info(" - Successful : %v\n", sess.Stats.ScreenshotSuccessful)
-	sess.Out.Info(" - Failed     : %v\n\n", sess.Stats.ScreenshotFailed)
+	sess.Out.Info(" - Successful   : %v\n", sess.Stats.ScreenshotSuccessful)
+	sess.Out.Info(" - Failed       : %v\n", sess.Stats.ScreenshotFailed)
+	sess.Out.Info(" - Deduplicated : %v\n\n", sess.Stats.ScreenshotDeduped)
 
 	sess.Out.Important("Wrote HTML report to: %s\n\n", sess.GetFilePath("aquatone_report.html"))
+}
+
+func screenshotRateDescription(rate int) string {
+	if rate == 0 {
+		return "unlimited rate"
+	}
+	return fmt.Sprintf("%d/s", rate)
 }

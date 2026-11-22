@@ -33,7 +33,7 @@ func (p *NmapParser) Parse(r io.Reader) ([]string, error) {
 		}
 	}
 
-	return targets, nil
+	return core.DeduplicateTargets(targets), nil
 }
 
 func (p *NmapParser) isHTTPPort(port int) bool {
